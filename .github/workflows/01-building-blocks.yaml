@@ -1,7 +1,7 @@
 name: 01 - Building Blocks
 
 on: 
-  workflow_dispatch  
+  workflow_dispatch:
   
 jobs:
   echo-hello:
