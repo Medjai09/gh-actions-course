@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
 
 jobs:
-    echo:
-        runs-on: ubuntu-latest
-        steps:
-            - name: Show the trigger
-              run: echo "Triggered on ${{ github.event_name }}"
+  echo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show the trigger
+        run: echo "Triggered on ${{ github.event_name }}"
