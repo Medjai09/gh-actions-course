@@ -13,10 +13,10 @@ jobs:
             - name: Use an action to set up Node.js
               uses: actions/setup-node@v3
               with:
-                  node-version: "24"
+                  node-version: "19.x"
 
             - name: Install dependencies
-              run: npm install
+              run: cd ./04-using-actions/react-app/react-app && npm ci
 
             - name: Run tests
-              run: npm run test
+              run: cd ./04-using-actions/react-app/react-app && npm run test
