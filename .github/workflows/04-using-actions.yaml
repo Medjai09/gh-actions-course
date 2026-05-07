@@ -6,6 +6,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./04-using-actions/react-app/react-app
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -16,7 +19,7 @@ jobs:
           node-version: "20.x"
 
       - name: Install dependencies
-        run: cd ./04-using-actions/react-app/react-app && npm install
+        run: npm install
 
       - name: Run tests
-        run: cd ./04-using-actions/react-app/react-app && npm run test
+        run: npm run test
