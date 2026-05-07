@@ -1,22 +1,22 @@
 name: 04 - Using Actions
 
 on:
-    workflow_dispatch:
+  workflow_dispatch:
 
 jobs:
-    build:
-        runs-on: ubuntu-latest
-        steps:
-            - name: Checkout code
-              uses: actions/checkout@v3
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-            - name: Use an action to set up Node.js
-              uses: actions/setup-node@v3
-              with:
-                  node-version: "20.x"
+      - name: Use an action to set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
 
-            - name: Install dependencies
-              run: cd ./04-using-actions/react-app/react-app && npm install
+      - name: Install dependencies
+        run: cd ./04-using-actions/react-app/react-app && npm install
 
-            - name: Run tests
-              run: cd ./04-using-actions/react-app/react-app && npm run test
+      - name: Run tests
+        run: cd ./04-using-actions/react-app/react-app && npm run test
