@@ -13,4 +13,5 @@ jobs:
               run: |
                   echo "Running whenever a PR is closed AND base branch is main"
                   echo "Event Name: ${{ github.event_name }}"
-                  echo "Activity Type: ${{ github.event.action }}"
+
+#                 echo "Activity Type: ${{ github.event.action }}"
