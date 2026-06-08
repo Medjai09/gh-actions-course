@@ -1,0 +1,47 @@
+name: Azure Login
+description: 'Login to Azure with OIDC (preferred) or service principal credentials'
+
+inputs:
+  client-id:
+    description: 'Azure AD application client ID (for OIDC)'
+    required: false
+  tenant-id:
+    description: 'Azure AD tenant ID (for OIDC)'
+    required: false
+  subscription-id:
+    description: 'Azure subscription ID (for OIDC)'
+    required: false
+  az-creds:
+    description: 'Azure service principal credentials JSON (legacy)'
+    required: false
+
+runs:
+  using: "composite"
+  steps:
+    - name: Validate Azure authentication inputs
+      if: ${{ inputs.client-id == '' && inputs.az-creds == '' }}
+      shell: bash
+      run: |
+        echo "::error::No Azure authentication method was provided. Supply OIDC inputs (client-id, tenant-id, and subscription-id) or az-creds."
+        exit 1
+
+    - name: Validate required OIDC inputs
+      if: ${{ inputs.client-id != '' && (inputs.tenant-id == '' || inputs.subscription-id == '') }}
+      shell: bash
+      run: |
+        echo "::error::When client-id is provided, tenant-id and subscription-id are also required."
+        exit 1
+          
+    - name: Azure Login (OIDC)
+      if: ${{ inputs.client-id != '' }}
+      uses: Azure/login@v2.3.0
+      with:
+        client-id: ${{ inputs.client-id }}
+        tenant-id: ${{ inputs.tenant-id }}
+        subscription-id: ${{ inputs.subscription-id }}
+
+    - name: Azure Login (Service Principal)
+      if: ${{ inputs.client-id == '' && inputs.az-creds != '' }}
+      uses: Azure/login@v2.3.0
+      with:
+        creds: ${{ inputs.az-creds }}

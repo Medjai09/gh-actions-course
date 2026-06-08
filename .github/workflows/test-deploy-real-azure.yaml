@@ -1,0 +1,71 @@
+name: Test Deploy to App Service Slots (Real Azure)
+
+# Reczne uruchamianie - klikasz "Run workflow" w zakladce Actions na GitHub
+# i podajesz wartosci dla swojego srodowiska Azure.
+on:
+  workflow_dispatch:
+    inputs:
+      resource-group:
+        description: "Azure Resource Group"
+        required: true
+        default: "rg-deployslots-test"
+      app-service-name:
+        description: "Nazwa App Service (bez sufiksu slotu)"
+        required: true
+      image-uri:
+        description: "Pelny URI obrazu, np. acrxxx.azurecr.io/myapp:1.0.0"
+        required: true
+      deployment-slot-name:
+        description: "Nazwa slotu deploymentu"
+        required: false
+        default: "deploy"
+      health-check-path:
+        description: "Sciezka health check"
+        required: false
+        default: "/health"
+      enable-debug:
+        description: "Wlacz logi debug"
+        required: false
+        default: "true"
+
+jobs:
+  deploy:
+    name: Deploy do slotu (prawdziwe Azure)
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write      # WYMAGANE dla logowania OIDC do Azure
+      contents: read
+
+    steps:
+      - name: Checkout repozytorium
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: ./composite/azure/azurelogin
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to App Service Slot
+        id: deploy
+        uses: ./composite/azure/deploy-to-app-service-slots
+        with:
+          resource-group: ${{ github.event.inputs.resource-group }}
+          app-service-name: ${{ github.event.inputs.app-service-name }}
+          deployment-slot-name: ${{ github.event.inputs.deployment-slot-name }}
+          image-uri: ${{ github.event.inputs.image-uri }}
+          health-check-path: ${{ github.event.inputs.health-check-path }}
+          health-check-retries: "10"
+          health-check-interval-seconds: "15"
+          startup-wait-seconds: "30"
+          enable-debug: ${{ github.event.inputs.enable-debug }}
+
+      - name: Pokaz wyniki
+        if: always()
+        run: |
+          echo "## Wynik deploymentu" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** ${{ steps.deploy.outputs.deployment-status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **URL slotu:** ${{ steps.deploy.outputs.slot-url }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Swap timestamp:** ${{ steps.deploy.outputs.swap-timestamp }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Czas trwania:** ${{ steps.deploy.outputs.deployment-duration }}s" >> $GITHUB_STEP_SUMMARY
