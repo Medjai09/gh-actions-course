@@ -52,6 +52,14 @@ server {
         add_header Content-Type application/json;
         return 200 '{"status":"UP"}';
     }
+    # Endpoint do testu rollbacku - celowo niezdrowy (zwraca 503).
+    # Wymagany, bo catch-all "location /" zwraca 200 dla KAZDEJ sciezki,
+    # wiec samo wskazanie nieistniejacej sciezki nie wywola rollbacku.
+    location /nope {
+        access_log off;
+        add_header Content-Type application/json;
+        return 503 '{"status":"DOWN"}';
+    }
     location / {
         add_header Content-Type text/plain;
         return 200 'hello from test-app';
@@ -159,8 +167,15 @@ az webapp log tail -n $APP -g $RG --slot deploy
 ## Scenariusze testowe
 
 - **Sukces** -> obraz z dzialajacym `/health` -> status `success`, swap wykonany.
-- **Rollback** -> ustaw `health-check-path` na nieistniejaca sciezke (np. `/nope`) ->
-  status `health-check-failed`, slot zatrzymany.
+- **Rollback** -> obraz musi miec endpoint zwracajacy blad (>= 400). Catch-all
+  `location /` zwraca 200 dla kazdej sciezki, wiec sama nieistniejaca sciezka NIE
+  wywola rollbacku. Uzyj endpointu `/nope` (zwraca 503) z Kroku 2: przebuduj obraz
+  i uruchom workflow z `health-check-path` = `/nope`:
+  ```bash
+  cd ~/test-app
+  az acr build -r $ACR -t myapp:rollback .
+  ```
+  Oczekiwany wynik: status `health-check-failed`, slot zatrzymany, job zakonczony bledem.
 - **Auto-tworzenie slotu** -> `az webapp deployment slot delete -n $APP -g $RG --slot deploy`
   przed uruchomieniem -> akcja sama odtworzy slot.
 
