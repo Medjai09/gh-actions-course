@@ -1,0 +1,23 @@
+title = "GitLeaks Test Rules"
+description = "Rules for testing GitLeaks action"
+
+[[rules]]
+id = "test-api-key"
+description = "Test API Key (for validation)"
+regex = '''test_api_key_[a-zA-Z0-9]{32}'''
+entropy = 3.5
+keywords = ["test_api_key"]
+
+[[rules]]
+id = "test-password"
+description = "Test Password Pattern"
+regex = '''password\s*[=:]\s*[a-zA-Z0-9]{8,}'''
+entropy = 4.0
+keywords = ["password"]
+
+[[rules]]
+id = "test-token"
+description = "Test Authentication Token"
+regex = '''auth_token[=:]\s*[a-zA-Z0-9_-]{32,}'''
+entropy = 4.5
+keywords = ["auth_token", "token"]

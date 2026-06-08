@@ -1,0 +1,70 @@
+name: Test GitLeaks Action
+
+on:
+    push:
+        paths:
+            - "composite/security/gitleaks/**"
+    pull_request:
+        paths:
+            - "composite/security/gitleaks/**"
+    workflow_dispatch:
+
+jobs:
+    test-default:
+        name: Test Default Ruleset
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            security-events: write
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Run GitLeaks with default ruleset
+              uses: ./composite/security/gitleaks
+              with:
+                  src-path: "."
+                  fail-on-detection: "false"
+
+    test-custom-ruleset:
+        name: Test Custom Ruleset
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            security-events: write
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Run GitLeaks with custom ruleset
+              uses: ./composite/security/gitleaks
+              with:
+                  src-path: "."
+                  ruleset-file: ".gitleaks/test-rules.toml"
+                  fail-on-detection: "false"
+
+    test-inline-ruleset:
+        name: Test Inline Ruleset
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            security-events: write
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Run GitLeaks with inline ruleset
+              uses: ./composite/security/gitleaks
+              with:
+                  custom-ruleset-content: |
+                      title = "Test Rules"
+                      [[rules]]
+                      id = "test-api-key"
+                      description = "Test API Key"
+                      regex = '''test_key_[a-zA-Z0-9]{16,}'''
+                      entropy = 4.0
+                      keywords = ["test_key"]
+                  fail-on-detection: "false"
