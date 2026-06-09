@@ -1,0 +1,67 @@
+name: Deploy to Azure App Service (slot)
+
+on:
+  workflow_dispatch:
+    inputs:
+      resource-group:
+        description: "Azure Resource Group"
+        required: true
+      app-service-name:
+        description: "App Service name (without slot suffix)"
+        required: true
+      image-uri:
+        description: "Full image URI, e.g. acrxxx.azurecr.io/<image-name>:<tag>"
+        required: true
+      deployment-slot-name:
+        description: "Deployment slot name"
+        required: false
+        default: "deploy"
+      health-check-path:
+        description: "Health-check path"
+        required: false
+        default: "/health"
+
+jobs:
+  deploy:
+    name: Deploy to slot
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # REQUIRED for OIDC login to Azure
+      contents: read
+
+    steps:
+      # Azure login (OIDC).
+      # This step can and/or should be replaced by the shared composite action
+      # at composite/azure/azurelogin, which wraps
+      # Azure/login and supports both OIDC and service-principal credentials.
+      # Alternatively, you may call Azure/login@v2 directly if you prefer not to
+      # depend on the shared action.
+      - name: Azure Login (OIDC)
+        uses: <owner>/<repo>/composite/azure/azurelogin@main
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to App Service Slot
+        id: deploy
+        uses: <owner>/<repo>/composite/azure/deploy-to-app-service-slots@main
+        with:
+          resource-group: ${{ github.event.inputs.resource-group }}
+          app-service-name: ${{ github.event.inputs.app-service-name }}
+          deployment-slot-name: ${{ github.event.inputs.deployment-slot-name }}
+          image-uri: ${{ github.event.inputs.image-uri }}
+          health-check-path: ${{ github.event.inputs.health-check-path }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          health-check-retries: "10"
+          health-check-interval-seconds: "15"
+          startup-wait-seconds: "30"
+
+      - name: Show results
+        if: always()
+        run: |
+          echo "## Deployment result" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** ${{ steps.deploy.outputs.deployment-status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Slot URL:** ${{ steps.deploy.outputs.slot-url }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Swap timestamp:** ${{ steps.deploy.outputs.swap-timestamp }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Duration:** ${{ steps.deploy.outputs.deployment-duration }}s" >> $GITHUB_STEP_SUMMARY

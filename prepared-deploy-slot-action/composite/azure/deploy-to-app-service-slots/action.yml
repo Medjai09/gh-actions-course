@@ -1,0 +1,386 @@
+name: "Deploy to App Service with Slot Management"
+description: "Zero-downtime deployment to Azure App Service using deployment slots with health checks and automatic rollback"
+
+inputs:
+  resource-group:
+    description: "Azure Resource Group name"
+    required: true
+
+  app-service-name:
+    description: "Azure App Service name (without slot suffix)"
+    required: true
+
+  deployment-slot-name:
+    description: "Deployment slot name (e.g., deploy, staging, blue)"
+    required: false
+    default: "deploy"
+
+  image-uri:
+    description: "Full Docker image URI (registry/repository:tag)"
+    required: true
+
+  subscription-id:
+    description: "Azure subscription ID. If provided, sets the active subscription via 'az account set' (useful when the login spans multiple subscriptions)."
+    required: false
+
+  create-slot-if-missing:
+    description: "Auto-create deployment slot if it does not exist"
+    required: false
+    default: "true"
+
+  health-check-path:
+    description: "Health check endpoint path (e.g., /health, /actuator/health, /ping)"
+    required: false
+    default: "/"
+
+  health-check-timeout-seconds:
+    description: "Total timeout for health check in seconds"
+    required: false
+    default: "300"
+
+  health-check-retries:
+    description: "Number of health check retry attempts"
+    required: false
+    default: "10"
+
+  health-check-interval-seconds:
+    description: "Wait time between health check attempts in seconds"
+    required: false
+    default: "15"
+
+  startup-wait-seconds:
+    description: "Initial wait time for application startup before first health check"
+    required: false
+    default: "30"
+
+  swap-timeout-seconds:
+    description: "Timeout for slot swap operation in seconds"
+    required: false
+    default: "600"
+
+  rollback-on-health-failure:
+    description: "Automatically rollback deployment if health check fails"
+    required: false
+    default: "true"
+
+  enable-debug:
+    description: "Enable debug logging for troubleshooting"
+    required: false
+    default: "false"
+
+outputs:
+  deployment-status:
+    description: "Deployment result: success, failure, health-check-failed, swap-failed"
+    value: ${{ steps.final-status.outputs.status }}
+
+  slot-url:
+    description: "URL of deployment slot"
+    value: ${{ steps.get-slot-url.outputs.slot-url }}
+
+  swap-timestamp:
+    description: "Timestamp of slot swap in ISO 8601 format (if successful)"
+    value: ${{ steps.swap-slots.outputs.swap-timestamp }}
+
+  deployment-duration:
+    description: "Total deployment duration in seconds"
+    value: ${{ steps.final-status.outputs.duration }}
+
+runs:
+  using: composite
+  steps:
+    - name: Initialize deployment tracking
+      id: start-time
+      shell: bash
+      run: |
+        echo "start_epoch=$(date +%s)" >> $GITHUB_ENV
+        echo "Deployment started at $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+
+    - name: Validate inputs
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if [[ -z "${{ inputs.resource-group }}" ]]; then
+          echo "::error::resource-group is required"
+          exit 1
+        fi
+
+        if [[ -z "${{ inputs.app-service-name }}" ]]; then
+          echo "::error::app-service-name is required"
+          exit 1
+        fi
+
+        if [[ -z "${{ inputs.image-uri }}" ]]; then
+          echo "::error::image-uri is required"
+          exit 1
+        fi
+
+        if ! [[ "${{ inputs.health-check-retries }}" =~ ^[0-9]+$ ]]; then
+          echo "::error::health-check-retries must be a positive integer"
+          exit 1
+        fi
+
+    - name: Set Azure subscription
+      if: ${{ inputs.subscription-id != '' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "Setting active Azure subscription to '${{ inputs.subscription-id }}'..."
+        az account set --subscription "${{ inputs.subscription-id }}"
+
+    - name: Enable debug logging
+      if: ${{ inputs.enable-debug == 'true' }}
+      shell: bash
+      run: |
+        echo "DEBUG MODE ENABLED"
+        echo "Input values:"
+        echo "  resource-group: ${{ inputs.resource-group }}"
+        echo "  app-service-name: ${{ inputs.app-service-name }}"
+        echo "  deployment-slot-name: ${{ inputs.deployment-slot-name }}"
+        echo "  image-uri: ${{ inputs.image-uri }}"
+        echo "  health-check-path: ${{ inputs.health-check-path }}"
+        echo "  health-check-timeout-seconds: ${{ inputs.health-check-timeout-seconds }}"
+        echo "  health-check-retries: ${{ inputs.health-check-retries }}"
+
+    - name: Stop deployment slot
+      id: stop-slot
+      continue-on-error: true
+      shell: bash
+      run: |
+        echo "Attempting to stop deployment slot '${{ inputs.deployment-slot-name }}'..."
+
+        if [[ "${{ inputs.enable-debug }}" == "true" ]]; then
+          echo "Command: az webapp stop --name ${{ inputs.app-service-name }} --slot ${{ inputs.deployment-slot-name }} --resource-group ${{ inputs.resource-group }}"
+        fi
+
+        az webapp stop \
+          --name "${{ inputs.app-service-name }}" \
+          --slot "${{ inputs.deployment-slot-name }}" \
+          --resource-group "${{ inputs.resource-group }}" || echo "Slot stop completed (may not exist yet)"
+
+    - name: Create deployment slot if missing
+      if: ${{ inputs.create-slot-if-missing == 'true' }}
+      id: create-slot
+      continue-on-error: true
+      shell: bash
+      run: |
+        echo "Checking if deployment slot '${{ inputs.deployment-slot-name }}' exists..."
+
+        SLOT_EXISTS=$(az webapp deployment slot list \
+          --name "${{ inputs.app-service-name }}" \
+          --resource-group "${{ inputs.resource-group }}" \
+          --query "[?name=='${{ inputs.deployment-slot-name }}'].name" \
+          --output tsv || echo "")
+
+        if [[ -z "$SLOT_EXISTS" ]]; then
+          echo "Slot does not exist. Creating slot '${{ inputs.deployment-slot-name }}'..."
+
+          az webapp deployment slot create \
+            --name "${{ inputs.app-service-name }}" \
+            --slot "${{ inputs.deployment-slot-name }}" \
+            --resource-group "${{ inputs.resource-group }}" \
+            --configuration-source "${{ inputs.app-service-name }}"
+
+          echo "Slot created successfully"
+        else
+          echo "Slot already exists"
+        fi
+
+    - name: Update container configuration
+      id: update-container
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        REGISTRY=$(echo "${{ inputs.image-uri }}" | cut -d'/' -f1)
+
+        echo "Updating container configuration..."
+        echo "  Registry: $REGISTRY"
+        echo "  Image: ${{ inputs.image-uri }}"
+
+        az webapp config container set \
+          --name "${{ inputs.app-service-name }}" \
+          --slot "${{ inputs.deployment-slot-name }}" \
+          --resource-group "${{ inputs.resource-group }}" \
+          --docker-custom-image-name "${{ inputs.image-uri }}" \
+          --docker-registry-server-url "https://$REGISTRY"
+
+        echo "Container configuration updated successfully"
+
+    - name: Start deployment slot
+      id: start-slot
+      shell: bash
+      run: |
+        echo "Starting deployment slot '${{ inputs.deployment-slot-name }}'..."
+
+        az webapp start \
+          --name "${{ inputs.app-service-name }}" \
+          --slot "${{ inputs.deployment-slot-name }}" \
+          --resource-group "${{ inputs.resource-group }}"
+
+        echo "Slot started successfully"
+
+    - name: Get slot URL
+      id: get-slot-url
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        SLOT_URL=$(az webapp show \
+          --name "${{ inputs.app-service-name }}" \
+          --slot "${{ inputs.deployment-slot-name }}" \
+          --resource-group "${{ inputs.resource-group }}" \
+          --query defaultHostName \
+          --output tsv)
+
+        if [[ -z "$SLOT_URL" ]]; then
+          echo "::error::Failed to retrieve slot URL"
+          exit 1
+        fi
+
+        echo "slot-url=https://$SLOT_URL" >> $GITHUB_OUTPUT
+        echo "Slot URL: https://$SLOT_URL"
+
+    - name: Wait for application startup
+      shell: bash
+      run: |
+        echo "Waiting ${{ inputs.startup-wait-seconds }} seconds for application startup..."
+        sleep ${{ inputs.startup-wait-seconds }}
+
+    - name: Perform health check
+      id: health-check
+      continue-on-error: true
+      shell: bash
+      run: |
+        set +euo pipefail
+
+        HEALTH_URL="${{ steps.get-slot-url.outputs.slot-url }}${{ inputs.health-check-path }}"
+        TIMEOUT=${{ inputs.health-check-timeout-seconds }}
+        RETRIES=${{ inputs.health-check-retries }}
+        INTERVAL=${{ inputs.health-check-interval-seconds }}
+
+        echo "Starting health check..."
+        echo "  URL: $HEALTH_URL"
+        echo "  Timeout: ${TIMEOUT}s"
+        echo "  Max retries: $RETRIES"
+        echo "  Interval between retries: ${INTERVAL}s"
+        echo ""
+
+        START_TIME=$(date +%s)
+        ATTEMPT=0
+
+        while [ $ATTEMPT -lt $RETRIES ]; do
+          ATTEMPT=$((ATTEMPT + 1))
+          ELAPSED=$(($(date +%s) - START_TIME))
+
+          if [ $ELAPSED -gt $TIMEOUT ]; then
+            echo "::warning::Health check timeout exceeded ($ELAPSED seconds > $TIMEOUT seconds)"
+            break
+          fi
+
+          echo "Health check attempt $ATTEMPT/$RETRIES (elapsed: ${ELAPSED}s)..."
+
+          if curl --silent --fail --max-time 30 --location "$HEALTH_URL" > /dev/null 2>&1; then
+            echo "✓ Health check passed at attempt $ATTEMPT"
+            echo "result=success" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          if [ $ATTEMPT -lt $RETRIES ]; then
+            SLEEP_TIME=$INTERVAL
+            if [ $((ELAPSED + INTERVAL)) -gt $TIMEOUT ]; then
+              SLEEP_TIME=$((TIMEOUT - ELAPSED))
+              [ $SLEEP_TIME -lt 1 ] && SLEEP_TIME=1
+            fi
+            echo "  Waiting ${SLEEP_TIME}s before retry..."
+            sleep $SLEEP_TIME
+          fi
+        done
+
+        echo ""
+        echo "::error::Health check failed after $ATTEMPT attempts (total time: ${ELAPSED}s)"
+        echo "result=failed" >> $GITHUB_OUTPUT
+        exit 1
+
+    - name: Swap slots (if health check passed)
+      id: swap-slots
+      if: ${{ steps.health-check.outcome == 'success' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        echo "Health check passed. Proceeding with slot swap..."
+
+        SWAP_START=$(date +%s)
+
+        az webapp deployment slot swap \
+          --name "${{ inputs.app-service-name }}" \
+          --slot "${{ inputs.deployment-slot-name }}" \
+          --resource-group "${{ inputs.resource-group }}"
+
+        SWAP_END=$(date +%s)
+        SWAP_DURATION=$((SWAP_END - SWAP_START))
+
+        echo "Slot swap completed successfully (took ${SWAP_DURATION}s)"
+        echo "swap-timestamp=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+
+    - name: Stop idle deployment slot
+      if: ${{ steps.health-check.outcome == 'success' }}
+      continue-on-error: true
+      shell: bash
+      run: |
+        echo "Stopping idle deployment slot '${{ inputs.deployment-slot-name }}' (now holding the previous production image)..."
+
+        az webapp stop \
+          --name "${{ inputs.app-service-name }}" \
+          --slot "${{ inputs.deployment-slot-name }}" \
+          --resource-group "${{ inputs.resource-group }}" || echo "Could not stop deployment slot (may not exist)"
+
+        echo "Idle deployment slot stopped"
+
+    - name: Rollback on health check failure
+      if: ${{ inputs.rollback-on-health-failure == 'true' && steps.health-check.outcome == 'failure' }}
+      shell: bash
+      run: |
+        echo "::error::Health check failed. Rolling back deployment by stopping slot."
+
+        az webapp stop \
+          --name "${{ inputs.app-service-name }}" \
+          --slot "${{ inputs.deployment-slot-name }}" \
+          --resource-group "${{ inputs.resource-group }}" || true
+
+        echo "Rollback completed - deployment slot stopped"
+        exit 1
+
+    - name: Calculate deployment duration
+      id: calculate-duration
+      shell: bash
+      run: |
+        end_epoch=$(date +%s)
+        duration=$((end_epoch - ${{ env.start_epoch }}))
+        echo "duration=$duration" >> $GITHUB_OUTPUT
+
+    - name: Set final deployment status
+      id: final-status
+      if: always()
+      shell: bash
+      run: |
+        if [ "${{ steps.swap-slots.outcome }}" == "success" ]; then
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "Deployment completed successfully"
+        elif [ "${{ steps.health-check.outcome }}" == "failure" ]; then
+          echo "status=health-check-failed" >> $GITHUB_OUTPUT
+        elif [ "${{ steps.swap-slots.outcome }}" == "failure" ]; then
+          echo "status=swap-failed" >> $GITHUB_OUTPUT
+        else
+          echo "status=failure" >> $GITHUB_OUTPUT
+        fi
+
+        end_epoch=$(date +%s)
+        duration=$((end_epoch - ${{ env.start_epoch }}))
+        echo "duration=$duration" >> $GITHUB_OUTPUT
+
+        echo ""
+        echo "=== Deployment Summary ==="
+        echo "Duration: ${duration}s"
+        echo "Status: $(cat $GITHUB_OUTPUT | grep 'status=' | cut -d'=' -f2)"
