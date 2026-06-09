@@ -42,7 +42,7 @@ jobs:
       contents: read
     steps:
       - name: Azure Login (OIDC)
-        uses: <owner>/<repo>/composite/azure/azurelogin@main
+        uses: procter-gamble/da-pp-pda-github-actions/composite/azure/azurelogin@main
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -50,7 +50,7 @@ jobs:
 
       - name: Deploy to App Service Slot
         id: deploy
-        uses: <owner>/<repo>/composite/azure/deploy-to-app-service-slots@main
+        uses: procter-gamble/da-pp-pda-github-actions/composite/azure/deploy-to-app-service-slots@main
         with:
           resource-group: my-resource-group
           app-service-name: my-app-service
