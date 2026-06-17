@@ -13,7 +13,7 @@ jobs:
 
       - name: Run pre-commit hooks
         id: pc
-        uses: ./pre-commit             # LOKALNA referencja (vendored), bez cross-repo
+        uses: ./composite/common/pre-commit             # LOKALNA referencja (vendored), bez cross-repo
         with:
           config-file: ".pre-commit-config.yaml"
           extra-args: "--all-files"    # obejmuje wszystkie pliki gałęzi
