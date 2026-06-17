@@ -1,0 +1,25 @@
+name: Pre-Commit (manual)
+
+on:
+  workflow_dispatch:        # tylko ręczne uruchamianie
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4      # zaciąga pliki wybranej gałęzi
+
+      - name: Run pre-commit hooks
+        id: pc
+        uses: ./composite/common/pre-commit             # LOKALNA referencja (vendored), bez cross-repo
+        with:
+          config-file: ".pre-commit-config.yaml"
+          extra-args: "--all-files"    # obejmuje wszystkie pliki gałęzi
+
+      - name: Show result
+        run: |
+          echo "cache-hit=${{ steps.pc.outputs.cache-hit }}"
+          echo "hooks-installed=${{ steps.pc.outputs.hooks-installed }}"
+          echo "result=${{ steps.pc.outputs.result }}"
