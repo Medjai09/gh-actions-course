@@ -285,7 +285,7 @@ runs:
         if [ -f "$REPORT_PATH" ]; then
           echo "report-path=${REPORT_PATH}" >> $GITHUB_OUTPUT
           echo "report-exists=true" >> $GITHUB_OUTPUT
-          
+
           # Count findings in SARIF
           if command -v jq &> /dev/null; then
             FINDINGS_COUNT=$(jq '.runs[0].results | length' "$REPORT_PATH" || echo "0")

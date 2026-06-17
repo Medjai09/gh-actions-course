@@ -166,13 +166,13 @@ runs:
 
         if [[ -z "$SLOT_EXISTS" ]]; then
           echo "Slot does not exist. Creating slot '${{ inputs.deployment-slot-name }}'..."
-          
+
           az webapp deployment slot create \
             --name "${{ inputs.app-service-name }}" \
             --slot "${{ inputs.deployment-slot-name }}" \
             --resource-group "${{ inputs.resource-group }}" \
             --configuration-source "${{ inputs.app-service-name }}"
-          
+
           echo "Slot created successfully"
         else
           echo "Slot already exists"
@@ -264,21 +264,21 @@ runs:
         while [ $ATTEMPT -lt $RETRIES ]; do
           ATTEMPT=$((ATTEMPT + 1))
           ELAPSED=$(($(date +%s) - START_TIME))
-          
+
           if [ $ELAPSED -gt $TIMEOUT ]; then
             echo "::warning::Health check timeout exceeded ($ELAPSED seconds > $TIMEOUT seconds)"
             break
           fi
-          
+
           echo "Health check attempt $ATTEMPT/$RETRIES (elapsed: ${ELAPSED}s)..."
-          
+
           if curl --silent --fail --max-time 30 --location "$HEALTH_URL" > /dev/null 2>&1; then
             echo "✓ Health check passed at attempt $ATTEMPT"
             echo "result=success" >> $GITHUB_OUTPUT
             exit 0
           fi
-          
-          if [ $ATTEMPT -lt $RETRIES ]; then
+
+                    if [ $ATTEMPT -lt $RETRIES ]; then
             SLEEP_TIME=$INTERVAL
             if [ $((ELAPSED + INTERVAL)) -gt $TIMEOUT ]; then
               SLEEP_TIME=$((TIMEOUT - ELAPSED))
