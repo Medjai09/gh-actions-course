@@ -1,0 +1,158 @@
+name: Pre-Commit Hooks
+description: >
+  Runs pre-commit hooks defined in the calling repository's
+  .pre-commit-config.yaml. Caches the pre-commit environment and installs
+  hooks on a cache miss. Optionally fetches a GitHub OIDC token and exposes it
+  to hooks that require authentication, sourced securely from the runner OIDC
+  endpoint (never as a plaintext input).
+author: SRE CICD Team
+
+inputs:
+  config-file:
+    description: >
+      Path to the pre-commit configuration file, relative to the repository
+      root.
+    required: false
+    default: ".pre-commit-config.yaml"
+
+  python-version:
+    description: >
+      Python version used to create the pre-commit environment.
+    required: false
+    default: "3.12"
+
+  extra-args:
+    description: >
+      Extra arguments passed verbatim to `pre-commit run`.
+      Defaults to running against all files.
+    required: false
+    default: "--all-files"
+
+  hook-id:
+    description: >
+      Optional single hook id to run. When empty, all configured hooks run.
+    required: false
+    default: ""
+
+  requires-oidc:
+    description: >
+      When "true", request a GitHub OIDC token and expose it to hooks via the
+      PRE_COMMIT_OIDC_TOKEN environment variable. The calling job MUST grant
+      `permissions: id-token: write`. No token is ever accepted as an input.
+    required: false
+    default: "false"
+
+  oidc-audience:
+    description: >
+      Audience (aud claim) requested for the OIDC token. Leave empty to use the
+      default audience for the repository.
+    required: false
+    default: ""
+
+  cache-key-prefix:
+    description: >
+      Prefix for the pre-commit cache key.
+    required: false
+    default: "precommit"
+
+outputs:
+  cache-hit:
+    description: 'Whether a usable pre-commit cache was restored ("true"/"false").'
+    value: ${{ steps.restore.outputs.cache-hit == 'true' }}
+
+  hooks-installed:
+    description: 'Whether hooks were installed during this run (cache miss path).'
+    value: ${{ steps.install.outputs.installed == 'true' }}
+
+  result:
+    description: 'Result of the hook run: "success" or "failure".'
+    value: ${{ steps.run.outcome == 'success' && 'success' || 'failure' }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install pre-commit
+      shell: bash
+      run: python -m pip install --upgrade pre-commit
+
+    - name: Validate config exists
+      shell: bash
+      run: |
+        if [ ! -f "${{ inputs.config-file }}" ]; then
+          echo "::error::pre-commit config not found at '${{ inputs.config-file }}'"
+          exit 1
+        fi
+
+    - name: Restore pre-commit cache
+      id: restore
+      uses: actions/cache/restore@v5
+      with:
+        path: ~/.cache/pre-commit
+        key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-py${{ inputs.python-version }}-${{ hashFiles(inputs.config-file) }}
+        restore-keys: |
+          ${{ inputs.cache-key-prefix }}-${{ runner.os }}-py${{ inputs.python-version }}-
+
+    - name: Install hooks (cache miss)
+      id: install
+      if: steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        PRE_COMMIT_CONFIG: ${{ inputs.config-file }}
+      run: |
+        echo "Cache miss - installing pre-commit hooks..."
+        pre-commit install-hooks --config "$PRE_COMMIT_CONFIG"
+        echo "installed=true" >> "$GITHUB_OUTPUT"
+
+    - name: Request OIDC token (secure, no plaintext input)
+      if: inputs.requires-oidc == 'true'
+      shell: bash
+      env:
+        OIDC_AUDIENCE: ${{ inputs.oidc-audience }}
+      run: |
+        if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+          echo "::error::OIDC requested but the runner OIDC endpoint is unavailable. Grant 'permissions: id-token: write' in the calling job."
+          exit 1
+        fi
+
+        REQUEST_URL="$ACTIONS_ID_TOKEN_REQUEST_URL"
+        if [ -n "$OIDC_AUDIENCE" ]; then
+          REQUEST_URL="${REQUEST_URL}&audience=$(printf '%s' "$OIDC_AUDIENCE" | jq -sRr @uri)"
+        fi
+
+        TOKEN="$(curl -sS \
+          -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          "$REQUEST_URL" | jq -r '.value')"
+
+        if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+          echo "::error::Failed to obtain an OIDC token from the runner endpoint."
+          exit 1
+        fi
+
+        # Mask before it can ever reach the log, then hand it to hooks via env.
+        echo "::add-mask::$TOKEN"
+        echo "PRE_COMMIT_OIDC_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+        echo "OIDC token acquired and masked; exposed to hooks as PRE_COMMIT_OIDC_TOKEN."
+
+    - name: Run pre-commit hooks
+      id: run
+      shell: bash
+      env:
+        PRE_COMMIT_CONFIG: ${{ inputs.config-file }}
+        HOOK_ID: ${{ inputs.hook-id }}
+        EXTRA_ARGS: ${{ inputs.extra-args }}
+      run: |
+        set -o pipefail
+        # shellcheck disable=SC2086
+        pre-commit run $HOOK_ID --config "$PRE_COMMIT_CONFIG" $EXTRA_ARGS
+
+    - name: Save pre-commit cache
+      if: steps.restore.outputs.cache-hit != 'true' && always()
+      uses: actions/cache/save@v5
+      with:
+        path: ~/.cache/pre-commit
+        key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-py${{ inputs.python-version }}-${{ hashFiles(inputs.config-file) }}
