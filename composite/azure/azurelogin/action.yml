@@ -31,7 +31,7 @@ runs:
       run: |
         echo "::error::When client-id is provided, tenant-id and subscription-id are also required."
         exit 1
-          
+
     - name: Azure Login (OIDC)
       if: ${{ inputs.client-id != '' }}
       uses: Azure/login@v2.3.0
